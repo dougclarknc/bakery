@@ -34,11 +34,11 @@ import com.google.gson.Gson;
  */
 @SuppressWarnings("serial")
 @WebServlet(name = "Reviewer", urlPatterns = "/reviewer")
-public class Reviewer extends HttpServlet {
+public class ReviewerServlet extends HttpServlet {
 
 	DatastoreService datastore;
 
-	protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+	protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws IOException {
 		PrintWriter out = resp.getWriter();
 		Gson gson = new Gson();
 
