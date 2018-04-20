@@ -2,7 +2,9 @@ package me.dougclarknc.bakery;
 
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.lang.reflect.Type;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -13,14 +15,12 @@ import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
-import org.jsoup.Jsoup;
-import org.jsoup.safety.Whitelist;
-
 import com.google.appengine.api.datastore.DatastoreFailureException;
 import com.google.appengine.api.datastore.DatastoreService;
 import com.google.appengine.api.datastore.DatastoreServiceFactory;
 import com.google.appengine.api.datastore.Entity;
 import com.google.appengine.api.datastore.EntityNotFoundException;
+import com.google.appengine.api.datastore.FetchOptions;
 import com.google.appengine.api.datastore.Key;
 import com.google.appengine.api.datastore.KeyFactory;
 import com.google.appengine.api.datastore.PreparedQuery;
@@ -28,6 +28,7 @@ import com.google.appengine.api.datastore.Query;
 import com.google.appengine.api.datastore.Query.FilterOperator;
 import com.google.appengine.api.datastore.Query.FilterPredicate;
 import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 
 @SuppressWarnings("serial")
 @WebServlet(name = "Product", urlPatterns = { "/product" })
@@ -37,53 +38,60 @@ public class ProductServlet extends HttpServlet {
 	
 	@Override
 	public void doPost(HttpServletRequest request, HttpServletResponse response) throws IOException, ServletException {
+		Gson gson = new Gson();
+		PrintWriter out = response.getWriter();
+		
 		// Create map of httpParameter that we want and run it through jSoup
-		Map<String, String> productContent = request.getParameterMap().entrySet().stream()
-				.filter(a -> a.getKey().startsWith("productContent_"))
-				.collect(Collectors.toMap(p -> p.getKey(), p -> Jsoup.clean(p.getValue()[0], Whitelist.basic())));
+		Type type = new TypeToken<Map<String, String>>(){}.getType();
+		Map<String,String> productContent = gson.fromJson(request.getReader().lines().collect(Collectors.joining(System.lineSeparator())), type);
 
-		Query q = new Query("Product").setFilter(
-				new FilterPredicate("title", FilterOperator.EQUAL, productContent.get("productContent_title")));
-		PreparedQuery pq = datastore.prepare(q);
-
-		Entity product = pq.asSingleEntity();
-		if (product == null)
+		String keyString = productContent.get("key");
+		Entity product = null;
+		if (keyString == null) {
 			product = new Entity("Product");
+		} else {
+			try {
+				product = datastore.get(KeyFactory.stringToKey(keyString));
+			} catch (EntityNotFoundException enfe) {
+				out.print(enfe.toString());
+			}
+		}
 
 		product.setProperty("title", productContent.get("productContent_title"));
 		product.setProperty("versions", productContent.get("productContent_versions"));
 
 		try {
-			datastore.put(product);
+			keyString = KeyFactory.keyToString(datastore.put(product));
 
 			// Send user to confirmation page with personalized confirm text
-			String confirmation = "Product with title " + productContent.get("productContent_title") + " created.";
+			String confirmation = "Product with title " + product.getProperty("title") + "and versions " + product.getProperty("versions") +" and key " + keyString + " created.";
 
-			request.setAttribute("confirmation", confirmation);
-			request.getRequestDispatcher("/confirm.jsp").forward(request, response);
+			out.println(confirmation);
 		} catch (DatastoreFailureException dsfe) {
+			out.println("Failure: " + dsfe.toString());
 			throw new ServletException("Datastore error", dsfe);
 		}
 	}
 
 	@Override
 	protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
-		
 		PrintWriter out = resp.getWriter();
 		Gson gson = new Gson();
-		
+		String keyString = req.getParameter("key");
+
 		// Create map of httpParameter that we want and run it through jSoup
-		Map<String, String> productContent = req.getParameterMap().entrySet().stream()
-				.filter(a -> a.getKey().startsWith("productContent_"))
-				.collect(Collectors.toMap(p -> p.getKey(), p -> Jsoup.clean(p.getValue()[0], Whitelist.basic())));
+		Type type = new TypeToken<Map<String, String>>(){}.getType();
+		Map<String,String> productContent = gson.fromJson(req.getReader().lines().collect(Collectors.joining(System.lineSeparator())), type);
 
 		List<Entity> products = new ArrayList<Entity>();
+		Map<String, String[]> productMap = new HashMap<String, String[]>();
+
 		if (productContent.isEmpty()) {
 			Query q  = new Query("Product").setFilter(new FilterPredicate("title", FilterOperator.NOT_EQUAL, ""));
 			PreparedQuery pq = datastore.prepare(q);
-			products = pq.asList(null);
+			products = pq.asList(FetchOptions.Builder.withDefaults());
 		} else {
-			Key key = KeyFactory.stringToKey(productContent.get("productContent_key"));
+			Key key = KeyFactory.stringToKey(keyString);
 			try {
 				products.add(datastore.get(key));
 			} catch (EntityNotFoundException e) {
@@ -91,8 +99,12 @@ public class ProductServlet extends HttpServlet {
 				e.printStackTrace();
 			}
 		}
+		for (Entity e : products) {
+			String[] data = {(String) e.getProperty("name"), (String) e.getProperty("versions")};
+			productMap.put(KeyFactory.keyToString(e.getKey()), data);
+		}
 		
-		String jsonRes = gson.toJson(products);
+		String jsonRes = gson.toJson(productMap);
 		out.println(jsonRes);
 	}
 
